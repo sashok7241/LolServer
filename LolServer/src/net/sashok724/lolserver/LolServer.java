@@ -3,6 +3,12 @@ package net.sashok724.lolserver;
 import java.awt.Component;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 
 import javax.swing.JButton;
 import javax.swing.JFrame;
@@ -13,13 +19,14 @@ import javax.swing.SwingConstants;
 import javax.swing.UIManager;
 import javax.swing.UnsupportedLookAndFeelException;
 
-public class LolServer implements ActionListener, LolServerCall
+public class LolServer implements ActionListener, Runnable
 {
 	private int totalc = 0;
 	private JTextField port, version, protocol, current_players, maximum_players, mood, kick;
 	private JButton start_button;
 	private JFrame frame;
 	private JLabel total;
+	private static final char nil = 0;
 	
 	public LolServer()
 	{
@@ -30,74 +37,23 @@ public class LolServer implements ActionListener, LolServerCall
 	{
 		try
 		{
-			LolServerWorker worker = new LolServerWorker(this);
-			tryConfigureServer(worker);
+			tryConfigureServer();
 			for(Component component : frame.getContentPane().getComponents())
 			{
-				if(component instanceof JLabel) continue;
+				if(component instanceof JLabel)
+				{
+					continue;
+				}
 				component.setEnabled(false);
 			}
 			start_button.setText("Запуск ЛОЛ-сервера...");
-			new Thread(worker).start();
-		} catch(LolServerException e1)
+			new Thread(this).start();
+		} catch(UnsupportedOperationException e1)
 		{
 			JOptionPane.showMessageDialog(frame, e1.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
 		}
 	}
 	
-	public void tryConfigureServer(LolServerWorker worker) throws LolServerException
-	{
-		try
-		{
-			worker.port = new Integer(port.getText());
-			if(worker.port < 0 || worker.port > 65535) throw new IllegalArgumentException();
-		} catch(Exception e)
-		{
-			throw new LolServerException("Вы указали неправильный порт");
-		}
-		try
-		{
-			String[] splitted = version.getText().split("\\.");
-			if(splitted.length != 3) throw new IllegalArgumentException();
-			worker.mc_version = new int[] { new Integer(splitted[0]), new Integer(splitted[1]), new Integer(splitted[2]) };
-			if(worker.mc_version[2] < 0 || worker.mc_version[2] > 9) throw new IllegalArgumentException();
-			if(worker.mc_version[1] < 0 || worker.mc_version[1] > 9) throw new IllegalArgumentException();
-			if(worker.mc_version[0] != 1) throw new IllegalArgumentException();
-		} catch(Exception e)
-		{
-			throw new LolServerException("Вы указали несуществующюю версию майнкрафта.");
-		}
-		try
-		{
-			worker.nt_version = new Integer(protocol.getText());
-			if(worker.nt_version < 0 || worker.nt_version > 0xFF) throw new IllegalArgumentException();
-		} catch(Exception e)
-		{
-			throw new LolServerException("Вы указали несуществующюю версию протокола.");
-		}
-		try
-		{
-			worker.maximum_players = new Integer(maximum_players.getText());
-			if(worker.maximum_players < 0) throw new IllegalArgumentException();
-		} catch(Exception e)
-		{
-			throw new LolServerException("Вы указали неправильное количество максимально возможных игроков.");
-		}
-		try
-		{
-			worker.current_players = new Integer(current_players.getText());
-			if(worker.maximum_players < 0) throw new IllegalArgumentException();
-		} catch(Exception e)
-		{
-			throw new LolServerException("Вы указали неправильное количество текущих игроков.");
-		}
-		if(worker.maximum_players < worker.current_players) throw new LolServerException("У вас игроков больше, чем максимально возможно =D");
-		if(kick.getText().isEmpty()) throw new LolServerException("Вы не указали сообщение для статуса.");
-		if(kick.getText().isEmpty()) throw new LolServerException("Вы не указали сообщение для кика.");
-		worker.kick = kick.getText().replaceAll("&", String.valueOf((char)167));
-		worker.mood = mood.getText().replaceAll("&", String.valueOf((char)167));
-	}
-
 	private void initialize()
 	{
 		frame = new JFrame();
@@ -182,24 +138,98 @@ public class LolServer implements ActionListener, LolServerCall
 		frame.setVisible(true);
 	}
 	
-	@Override public void onErrorLaunching()
+	@Override public void run()
 	{
-		for(Component component : frame.getContentPane().getComponents())
+		try(ServerSocket server = new ServerSocket())
 		{
-			if(component instanceof JLabel) continue;
-			component.setEnabled(true);
+			server.setPerformancePreferences(1, 2, 0);
+			server.bind(new InetSocketAddress(new Integer(port.getText())));
+			start_button.setText("Сервер LOL успешно запущен!");
+			while(server.isBound())
+			{
+				try(Socket socket = server.accept(); DataInputStream input = new DataInputStream(socket.getInputStream()); DataOutputStream output = new DataOutputStream(socket.getOutputStream()))
+				{
+					socket.setSoTimeout(5000);
+					String text = kick.getText().replaceAll("&", String.valueOf((char) 167));
+					total.setText("Всего было обработано подключений: " + totalc++);
+					if(input.read() == 0xFE && input.read() == 0x01)
+					{
+						text = (char) 167 + "1" + nil + protocol.getText() + nil + version.getText() + nil + mood.getText().replaceAll("&", String.valueOf((char) 167)) + nil + current_players.getText() + nil + maximum_players.getText();
+					}
+					output.write(0xFF);
+					output.writeShort(text.length());
+					for(char c : text.toCharArray())
+					{
+						output.writeShort(c);
+					}
+				} catch(Exception e)
+				{
+					continue;
+				}
+			}
+		} catch(IOException e)
+		{
+			for(Component component : frame.getContentPane().getComponents())
+			{
+				if(component instanceof JLabel)
+				{
+					continue;
+				}
+				component.setEnabled(true);
+			}
+			start_button.setText("Ошибка! Пробуем еще раз?");
 		}
-		start_button.setText("Ошибка! Пробуем еще раз?");
 	}
 	
-	@Override public void onPlayerConnected(String ip)
+	public void tryConfigureServer() throws UnsupportedOperationException
 	{
-		total.setText("Всего было обработано подключений: " + totalc++);
-	}
-	
-	@Override public void onSuccessLaunching()
-	{
-		start_button.setText("Сервер LOL успешно запущен!");
+		try
+		{
+			int mcport = new Integer(port.getText());
+			if(mcport < 0 || mcport > 65535) throw new IllegalArgumentException();
+		} catch(Exception e)
+		{
+			throw new UnsupportedOperationException("Вы указали неправильный порт");
+		}
+		try
+		{
+			String[] splitted = version.getText().split("\\.");
+			if(splitted.length != 3) throw new IllegalArgumentException();
+			int[] mc_version = new int[] { new Integer(splitted[0]), new Integer(splitted[1]), new Integer(splitted[2]) };
+			if(mc_version[2] < 0 || mc_version[2] > 9) throw new IllegalArgumentException();
+			if(mc_version[1] < 0 || mc_version[1] > 9) throw new IllegalArgumentException();
+			if(mc_version[0] != 1) throw new IllegalArgumentException();
+		} catch(Exception e)
+		{
+			throw new UnsupportedOperationException("Вы указали несуществующюю версию майнкрафта.");
+		}
+		try
+		{
+			int nt_version = new Integer(protocol.getText());
+			if(nt_version < 0 || nt_version > 0xFF) throw new IllegalArgumentException();
+		} catch(Exception e)
+		{
+			throw new UnsupportedOperationException("Вы указали несуществующюю версию протокола.");
+		}
+		try
+		{
+			int cmaximum_players = new Integer(maximum_players.getText());
+			if(cmaximum_players < 0) throw new IllegalArgumentException();
+		} catch(Exception e)
+		{
+			throw new UnsupportedOperationException("Вы указали неправильное количество максимально возможных игроков.");
+		}
+		try
+		{
+			int ccurrent_players = new Integer(current_players.getText());
+			if(ccurrent_players < 0) throw new IllegalArgumentException();
+		} catch(Exception e)
+		{
+			throw new UnsupportedOperationException("Вы указали неправильное количество текущих игроков.");
+		}
+		if(new Integer(maximum_players.getText()) < new Integer(current_players.getText())) throw new UnsupportedOperationException("У вас игроков больше, чем максимально возможно =D");
+		if(kick.getText().isEmpty()) throw new UnsupportedOperationException("Вы не указали сообщение для статуса.");
+		if(kick.getText().isEmpty()) throw new UnsupportedOperationException("Вы не указали сообщение для кика.");
 	}
 	
 	public static void main(String[] args) throws ClassNotFoundException, InstantiationException, IllegalAccessException, UnsupportedLookAndFeelException
