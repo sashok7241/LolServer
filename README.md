@@ -1,0 +1,4 @@
+LolServer
+=========
+
+Fake minecraft server!
